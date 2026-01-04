@@ -1,4 +1,4 @@
-// Guidesoft: Seed data loader for GSModeling platform
+// Seed data loader for GSModeling platform (idempotent for seed accounts)
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const corsHeaders = {
@@ -6,249 +6,343 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
+type AppRole = 'super_admin' | 'admin' | 'agency' | 'model' | 'brand';
+
+const SEED_TAG = 'Guidesoft Seed';
+
+const getEnv = (key: string) => {
+  const v = Deno.env.get(key);
+  if (!v) throw new Error(`${key} is not configured`);
+  return v;
+};
+
+async function findUserIdByEmail(supabase: any, email: string): Promise<string | null> {
+  // Best-effort lookup via admin list (requires service role)
+  const lower = email.toLowerCase();
+  let page = 1;
+  const perPage = 1000;
+
+  while (page <= 10) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage });
+    if (error) throw error;
+    const hit = data?.users?.find((u: any) => (u.email || '').toLowerCase() === lower);
+    if (hit?.id) return hit.id;
+    if (!data?.users || data.users.length < perPage) break;
+    page += 1;
+  }
+  return null;
+}
+
+async function ensureAuthUser(
+  supabase: any,
+  {
+    email,
+    password,
+    role,
+    fullName,
+  }: { email: string; password: string; role: AppRole; fullName: string },
+): Promise<string> {
+  const { data, error } = await supabase.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { role },
+  });
+
+  let userId = data?.user?.id as string | undefined;
+  if (!userId) {
+    // user may already exist
+    if (error) {
+      const existingId = await findUserIdByEmail(supabase, email);
+      if (!existingId) throw error;
+      userId = existingId;
+    } else {
+      throw new Error(`Unable to create/find user for ${email}`);
+    }
   }
 
+  // Profiles table uses id = auth.users.id
+  await supabase.from('profiles').upsert(
+    {
+      id: userId,
+      email,
+      full_name: fullName,
+      bio: `${SEED_TAG}: Demo profile`,
+    },
+    { onConflict: 'id' },
+  );
+
+  // Ensure role exists (unique on user_id + role)
+  await supabase.from('user_roles').upsert(
+    { user_id: userId, role },
+    { onConflict: 'user_id,role' },
+  );
+
+  return userId;
+}
+
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
+
   try {
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
+    const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'));
 
-    console.log('Guidesoft: Starting database seeding...');
+    const body = req.method === 'POST' ? await req.json().catch(() => ({})) : {};
+    const modelCount = Math.min(Math.max(parseInt(body?.modelCount ?? '30', 10) || 30, 10), 80);
 
-    // Create dummy users for agencies
-    const agencyUsers = [];
-    const agencyEmails = [
-      'elite@example.com', 'img@example.com', 'next@example.com', 
-      'society@example.com', 'women@example.com', 'storm@example.com',
-      'dna@example.com', 'ford@example.com', 'select@example.com', 'marilyn@example.com'
+    console.log(`${SEED_TAG}: Starting database seeding...`);
+
+    // Seed accounts
+    const agencyAccounts = [
+      { email: 'elite@seed.gsmodeling.app', fullName: 'Elite Model Management', country: 'USA', city: 'New York' },
+      { email: 'img@seed.gsmodeling.app', fullName: 'IMG Models', country: 'USA', city: 'Los Angeles' },
+      { email: 'next@seed.gsmodeling.app', fullName: 'Next Model Management', country: 'France', city: 'Paris' },
+      { email: 'storm@seed.gsmodeling.app', fullName: 'Storm Models', country: 'UK', city: 'London' },
+      { email: 'women@seed.gsmodeling.app', fullName: 'Women Management', country: 'Italy', city: 'Milan' },
     ];
 
-    for (const email of agencyEmails) {
-      const { data: authData, error: authError } = await supabase.auth.admin.createUser({
-        email,
-        password: 'TempPassword123!',
-        email_confirm: true,
-        user_metadata: { role: 'agency' }
-      });
+    const brandAccounts = [
+      { email: 'brand1@seed.gsmodeling.app', fullName: 'Aurora Studio' },
+      { email: 'brand2@seed.gsmodeling.app', fullName: 'Northlight Brands' },
+    ];
 
-      if (authError) {
-        console.log(`Skipping existing user: ${email}`);
-        // Try to get existing user
-        const { data: existingUsers } = await supabase
-          .from('profiles')
-          .select('user_id')
-          .eq('email', email)
-          .limit(1);
-        
-        if (existingUsers && existingUsers.length > 0) {
-          agencyUsers.push(existingUsers[0].user_id);
-        }
-      } else if (authData.user) {
-        agencyUsers.push(authData.user.id);
-        console.log(`Created user for: ${email}`);
-      }
+    const password = 'TempPassword123!';
+
+    const agencyUserIds: string[] = [];
+    for (const a of agencyAccounts) {
+      agencyUserIds.push(
+        await ensureAuthUser(supabase, { email: a.email, password, role: 'agency', fullName: a.fullName }),
+      );
     }
 
-    console.log(`Guidesoft: Created/found ${agencyUsers.length} agency users`);
+    const brandUserIds: string[] = [];
+    for (const b of brandAccounts) {
+      brandUserIds.push(await ensureAuthUser(supabase, { email: b.email, password, role: 'brand', fullName: b.fullName }));
+    }
 
-    // Seed model categories
+    // Clean previous seed rows for seed accounts (idempotent)
+    // - models -> cascades portfolio_images + mapping
+    const seedModelEmails = Array.from({ length: modelCount }).map((_, i) => `model${i + 1}@seed.gsmodeling.app`);
+    const seedModelUserIds: string[] = [];
+    for (let i = 0; i < seedModelEmails.length; i++) {
+      const email = seedModelEmails[i];
+      const fullName = `Model ${i + 1}`;
+      seedModelUserIds.push(await ensureAuthUser(supabase, { email, password, role: 'model', fullName }));
+    }
+
+    // Delete existing rows tied to seed accounts
+    await supabase.from('bookings').delete().in('client_id', brandUserIds);
+    await supabase.from('events').delete().in('created_by', brandUserIds);
+    // Keep cleanup simple and PostgREST-safe: delete any previous seed campaigns by slug prefix
+    await supabase.from('campaigns').delete().like('slug', 'seed-%');
+    await supabase.from('models').delete().in('user_id', seedModelUserIds);
+    await supabase.from('agencies').delete().in('user_id', agencyUserIds);
+
+    // Seed categories (merge with defaults)
     const categories = [
+      { name: 'Editorial', description: 'High-fashion editorial modeling' },
+      { name: 'Runway', description: 'Catwalk and fashion show modeling' },
+      { name: 'Commercial', description: 'Commercial and advertising modeling' },
+      { name: 'Beauty', description: 'Beauty and cosmetic modeling' },
+      { name: 'Fitness', description: 'Fitness and athletic modeling' },
+      { name: 'Plus Size', description: 'Plus size fashion modeling' },
+      { name: 'Petite', description: 'Petite fashion modeling' },
       { name: 'Fashion', description: 'High fashion runway and editorial' },
-      { name: 'Editorial', description: 'Magazine and artistic photography' },
-      { name: 'Commercial', description: 'Advertising and brand campaigns' },
-      { name: 'Runway', description: 'Fashion show specialists' },
-      { name: 'Plus Size', description: 'Size-inclusive modeling' },
       { name: 'Mature', description: '40+ experienced professionals' },
     ];
 
     const { data: categoryData, error: catError } = await supabase
       .from('model_categories')
       .upsert(categories, { onConflict: 'name' })
-      .select();
-
+      .select('id,name');
     if (catError) throw catError;
-    console.log(`Guidesoft: Seeded ${categoryData.length} categories`);
 
-    // Seed agencies
-    const agencies = [
-      { name: 'Elite Model Management', country: 'USA', city: 'New York', email: 'contact@elite-ny.com', phone: '+1-212-555-0100', website: 'https://elitemodel.com', description: 'Premier modeling agency with global reach', verified: true, status: 'approved', user_id: agencyUsers[0] },
-      { name: 'IMG Models', country: 'USA', city: 'Los Angeles', email: 'info@imgmodels.com', phone: '+1-310-555-0200', website: 'https://imgmodels.com', description: 'Leading international talent agency', verified: true, status: 'approved', user_id: agencyUsers[1] },
-      { name: 'Next Model Management', country: 'France', city: 'Paris', email: 'paris@nextmodels.com', phone: '+33-1-555-0300', website: 'https://nextmodels.com', description: 'Top European modeling agency', verified: true, status: 'approved', user_id: agencyUsers[2] },
-      { name: 'The Society Management', country: 'USA', city: 'New York', email: 'hello@thesocietynyc.com', phone: '+1-212-555-0400', website: 'https://thesociety.com', description: 'Boutique agency representing top talent', verified: true, status: 'approved', user_id: agencyUsers[3] },
-      { name: 'Women Management', country: 'Italy', city: 'Milan', email: 'milan@womenmanagement.com', phone: '+39-02-555-0500', website: 'https://womenmanagement.com', description: 'Fashion capital representation', verified: true, status: 'approved', user_id: agencyUsers[4] },
-      { name: 'Storm Models', country: 'UK', city: 'London', email: 'info@stormmodels.com', phone: '+44-20-555-0600', website: 'https://stormmodels.com', description: 'Iconic British modeling agency', verified: true, status: 'approved', user_id: agencyUsers[5] },
-      { name: 'DNA Models', country: 'USA', city: 'New York', email: 'info@dnamodels.com', phone: '+1-212-555-0700', website: 'https://dnamodels.com', description: 'Innovative talent representation', verified: true, status: 'approved', user_id: agencyUsers[6] },
-      { name: 'Ford Models', country: 'USA', city: 'Chicago', email: 'chicago@fordmodels.com', phone: '+1-312-555-0800', website: 'https://fordmodels.com', description: 'Historic agency since 1946', verified: true, status: 'approved', user_id: agencyUsers[7] },
-      { name: 'Select Model Management', country: 'UK', city: 'London', email: 'bookings@selectmodel.com', phone: '+44-20-555-0900', website: 'https://selectmodel.com', description: 'Premier UK representation', verified: true, status: 'approved', user_id: agencyUsers[8] },
-      { name: 'Marilyn Agency', country: 'France', city: 'Paris', email: 'contact@marilynagency.com', phone: '+33-1-555-1000', website: 'https://marilynagency.com', description: 'Parisian excellence in modeling', verified: true, status: 'approved', user_id: agencyUsers[9] },
+    const categoryIdByName = new Map<string, string>();
+    for (const c of categoryData ?? []) categoryIdByName.set(c.name, c.id);
+
+    // Seed agencies (one per agency user)
+    const agenciesToInsert = agencyAccounts.map((a, idx) => ({
+      user_id: agencyUserIds[idx],
+      name: a.fullName,
+      description: `${SEED_TAG}: Premium modeling agency (${a.city})`,
+      email: `contact@${a.fullName.toLowerCase().replace(/\s+/g, '')}.example`,
+      phone: '+1-000-000-0000',
+      website: 'https://example.com',
+      city: a.city,
+      country: a.country,
+      status: 'approved',
+      verified: true,
+    }));
+
+    const { data: agencyData, error: agencyError } = await supabase.from('agencies').insert(agenciesToInsert).select('id');
+    if (agencyError) throw agencyError;
+
+    // Seed models
+    const firstNames = [
+      'Aarav', 'Vihaan', 'Arjun', 'Ishaan', 'Kabir', 'Reyansh',
+      'Aanya', 'Diya', 'Ira', 'Meera', 'Saanvi', 'Anaya',
+      'Maya', 'Aria', 'Zoe', 'Luna', 'Noah', 'Leo', 'Finn', 'Mia',
+    ];
+    const lastNames = [
+      'Sharma', 'Gupta', 'Iyer', 'Reddy', 'Singh', 'Patel', 'Khan', 'Roy', 'Kapoor', 'Mehta',
+      'Chen', 'Garcia', 'Brown', 'Rossi', 'Nguyen', 'Kim', 'Ivanov', 'Silva',
     ];
 
-    const { data: agencyData, error: agencyError } = await supabase
-      .from('agencies')
-      .insert(agencies)
-      .select();
+    const genders = ['Female', 'Male', 'Non-binary'] as const;
+    const hairColors = ['Blonde', 'Brown', 'Black', 'Red', 'Auburn'] as const;
+    const eyeColors = ['Blue', 'Brown', 'Green', 'Hazel'] as const;
+    const ethnicities = ['Asian', 'South Asian', 'African', 'Hispanic', 'Caucasian', 'Mixed', 'Middle Eastern'] as const;
+    const categoryNames = Array.from(categoryIdByName.keys());
 
-    if (agencyError) throw agencyError;
-    console.log(`Guidesoft: Seeded ${agencyData.length} agencies`);
+    const modelsToInsert = seedModelUserIds.map((userId, i) => {
+      const first = firstNames[i % firstNames.length];
+      const last = lastNames[(i * 3) % lastNames.length];
+      const gender = genders[i % genders.length];
 
-    // Seed models with varied data
-    const firstNames = ['Emma', 'Olivia', 'Sophia', 'Isabella', 'Ava', 'Mia', 'Charlotte', 'Amelia', 'Harper', 'Evelyn', 'Liam', 'Noah', 'Oliver', 'Elijah', 'James', 'William', 'Benjamin', 'Lucas', 'Henry', 'Alexander', 'Zoe', 'Luna', 'Stella', 'Maya', 'Aria', 'Kai', 'Leo', 'Felix', 'Finn', 'Atlas'];
-    const lastNames = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis', 'Rodriguez', 'Martinez', 'Anderson', 'Taylor', 'Thomas', 'Moore', 'Jackson', 'White', 'Harris', 'Martin', 'Thompson', 'King'];
-    const ethnicities = ['Caucasian', 'African', 'Asian', 'Hispanic', 'Mixed', 'Middle Eastern'];
-    const hairColors = ['Blonde', 'Brown', 'Black', 'Red', 'Auburn', 'Gray'];
-    const eyeColors = ['Blue', 'Brown', 'Green', 'Hazel', 'Gray'];
-    const genders = ['Female', 'Male', 'Non-binary'];
+      const height = 164 + (i % 20);
+      const rating = Math.max(3.8, 4.2 + ((i % 8) / 20));
 
-    const models = [];
-    for (let i = 0; i < 50; i++) {
-      const firstName = firstNames[Math.floor(Math.random() * firstNames.length)];
-      const lastName = lastNames[Math.floor(Math.random() * lastNames.length)];
-      const gender = genders[Math.floor(Math.random() * genders.length)];
-      
-      models.push({
-        full_name: `${firstName} ${lastName}`,
-        stage_name: Math.random() > 0.5 ? firstName : null,
+      return {
+        user_id: userId,
+        agency_id: agencyData?.[i % (agencyData?.length || 1)]?.id ?? null,
+        full_name: `${first} ${last}`,
+        stage_name: i % 3 === 0 ? first : null,
         gender,
-        date_of_birth: new Date(1990 + Math.floor(Math.random() * 15), Math.floor(Math.random() * 12), Math.floor(Math.random() * 28)).toISOString().split('T')[0],
-        height_cm: 165 + Math.floor(Math.random() * 25),
-        weight_kg: 50 + Math.floor(Math.random() * 30),
-        bust_cm: gender === 'Female' ? 80 + Math.floor(Math.random() * 15) : null,
-        waist_cm: 60 + Math.floor(Math.random() * 20),
-        hips_cm: gender === 'Female' ? 85 + Math.floor(Math.random() * 15) : null,
-        shoe_size: gender === 'Female' ? `${6 + Math.floor(Math.random() * 5)}` : `${9 + Math.floor(Math.random() * 4)}`,
-        hair_color: hairColors[Math.floor(Math.random() * hairColors.length)],
-        eye_color: eyeColors[Math.floor(Math.random() * eyeColors.length)],
-        ethnicity: ethnicities[Math.floor(Math.random() * ethnicities.length)],
-        experience_years: Math.floor(Math.random() * 10),
-        agency_id: agencyData[Math.floor(Math.random() * agencyData.length)].id,
-        featured: Math.random() > 0.7,
-        verified: Math.random() > 0.3,
-        available: Math.random() > 0.2,
-        rating: (3 + Math.random() * 2).toFixed(2),
-        total_bookings: Math.floor(Math.random() * 100),
+        date_of_birth: new Date(1994 + (i % 8), (i * 7) % 12, ((i * 3) % 27) + 1).toISOString().split('T')[0],
+        height_cm: height,
+        weight_kg: 50 + (i % 18),
+        bust_cm: gender === 'Female' ? 80 + (i % 12) : null,
+        waist_cm: 58 + (i % 16),
+        hips_cm: gender === 'Female' ? 86 + (i % 12) : null,
+        shoe_size: gender === 'Female' ? String(6 + (i % 5)) : String(9 + (i % 4)),
+        hair_color: hairColors[i % hairColors.length],
+        eye_color: eyeColors[i % eyeColors.length],
+        ethnicity: ethnicities[i % ethnicities.length],
+        experience_years: i % 8,
+        featured: i % 6 === 0,
+        verified: true,
+        available: i % 10 !== 0,
+        rating,
+        total_bookings: 10 + (i % 70),
         status: 'approved',
-      });
-    }
+      };
+    });
 
-    const { data: modelData, error: modelError } = await supabase
-      .from('models')
-      .insert(models)
-      .select();
-
+    const { data: modelData, error: modelError } = await supabase.from('models').insert(modelsToInsert).select('id, user_id');
     if (modelError) throw modelError;
-    console.log(`Guidesoft: Seeded ${modelData.length} models`);
 
-    // Seed portfolio images (200+ total)
-    const portfolioImages = [];
-    const unsplashIds = [1489424816437, 1506794778202, 1515886657613, 1534528741775, 1524504388940, 1529626455594, 1490000000000, 1495000000000, 1500000000000, 1505000000000];
-    
-    for (const model of modelData) {
-      const numImages = 3 + Math.floor(Math.random() * 5); // 3-7 images per model
-      for (let j = 0; j < numImages; j++) {
-        const baseId = unsplashIds[Math.floor(Math.random() * unsplashIds.length)];
+    // Seed model categories mapping (1-2 categories per model)
+    const mappingRows: any[] = [];
+    for (let i = 0; i < (modelData?.length || 0); i++) {
+      const m = modelData[i];
+      const c1 = categoryNames[i % categoryNames.length];
+      const c2 = categoryNames[(i + 3) % categoryNames.length];
+      const id1 = categoryIdByName.get(c1);
+      const id2 = categoryIdByName.get(c2);
+      if (id1) mappingRows.push({ model_id: m.id, category_id: id1 });
+      if (id2 && id2 !== id1) mappingRows.push({ model_id: m.id, category_id: id2 });
+    }
+    const { error: mapError } = await supabase
+      .from('model_category_mapping')
+      .upsert(mappingRows, { onConflict: 'model_id,category_id' });
+    if (mapError) throw mapError;
+
+    // Seed portfolio images (stable demo URLs)
+    const portfolioImages: any[] = [];
+    for (let i = 0; i < (modelData?.length || 0); i++) {
+      const model = modelData[i];
+      const count = 4 + (i % 3); // 4-6
+      for (let j = 0; j < count; j++) {
         portfolioImages.push({
           model_id: model.id,
-          image_url: `https://images.unsplash.com/photo-${baseId + j * 100000}?w=800&h=1000&fit=crop`,
+          image_url: `https://picsum.photos/seed/gsmodel-${model.id}-${j}/800/1000`,
           is_cover: j === 0,
-          title: j === 0 ? 'Cover Photo' : `Portfolio ${j}`,
+          title: j === 0 ? 'Cover Photo' : `Portfolio ${j + 1}`,
           display_order: j,
+          description: `${SEED_TAG}: Demo image`,
         });
       }
     }
-
-    const { data: portfolioData, error: portfolioError } = await supabase
-      .from('portfolio_images')
-      .insert(portfolioImages)
-      .select();
-
+    const { error: portfolioError } = await supabase.from('portfolio_images').insert(portfolioImages);
     if (portfolioError) throw portfolioError;
-    console.log(`Guidesoft: Seeded ${portfolioData.length} portfolio images`);
 
-    // Seed campaigns
+    // Seed campaigns (slug is unique, safe to upsert)
     const campaignTypes = ['Editorial', 'Commercial', 'Fashion Show', 'Brand Campaign', 'Catalog', 'E-commerce'];
-    const brands = ['Gucci', 'Prada', 'Versace', 'Chanel', 'Dior', 'Calvin Klein', 'Nike', 'Adidas', 'Zara', 'H&M', 'Louis Vuitton', 'Hermès', 'Balenciaga', 'Burberry', 'Fendi', 'Givenchy', 'Valentino', 'Saint Laurent', 'Armani', 'Dolce & Gabbana'];
-    
-    const campaigns = [];
-    for (let i = 0; i < 20; i++) {
-      campaigns.push({
-        title: `${brands[Math.floor(Math.random() * brands.length)]} ${campaignTypes[Math.floor(Math.random() * campaignTypes.length)]} 202${4 + Math.floor(Math.random() * 2)}`,
-        slug: `campaign-${i + 1}`,
-        campaign_type: campaignTypes[Math.floor(Math.random() * campaignTypes.length)],
-        brand_name: brands[Math.floor(Math.random() * brands.length)],
-        description: 'Premium campaign seeking diverse talent for international exposure. Professional production with top photographers and creative team.',
-        start_date: new Date(2024, Math.floor(Math.random() * 12), 1).toISOString(),
-        end_date: new Date(2025, Math.floor(Math.random() * 12), 1).toISOString(),
-        budget_min: 5000 + Math.floor(Math.random() * 10000),
-        budget_max: 20000 + Math.floor(Math.random() * 30000),
-        location: ['New York', 'Los Angeles', 'Paris', 'Milan', 'London', 'Tokyo'][Math.floor(Math.random() * 6)],
-        country: ['USA', 'France', 'Italy', 'UK', 'Japan'][Math.floor(Math.random() * 5)],
-        featured: Math.random() > 0.6,
-        status: 'approved',
-      });
-    }
+    const brands = ['GSMODELING Studio', 'Aurora', 'Northlight', 'Maison Noir', 'Silverline', 'Luxe & Co.'];
+
+    const campaigns = Array.from({ length: 12 }).map((_, i) => ({
+      title: `${brands[i % brands.length]} ${campaignTypes[i % campaignTypes.length]} 2026`,
+      slug: `seed-campaign-${i + 1}`,
+      campaign_type: campaignTypes[i % campaignTypes.length],
+      brand_name: brands[i % brands.length],
+      client_id: brandUserIds[i % brandUserIds.length],
+      description: `${SEED_TAG}: Premium campaign seeking diverse talent for international exposure.`,
+      start_date: new Date(2026, (i % 12), 1).toISOString(),
+      end_date: new Date(2026, (i % 12), 28).toISOString(),
+      budget_min: 10000 + i * 500,
+      budget_max: 25000 + i * 1000,
+      location: ['New York', 'Los Angeles', 'Paris', 'Milan', 'London', 'Tokyo'][i % 6],
+      country: ['USA', 'France', 'Italy', 'UK', 'Japan'][i % 5],
+      images: [`https://picsum.photos/seed/gs-campaign-${i}/1200/700`],
+      featured: i % 4 === 0,
+      status: 'approved',
+    }));
 
     const { data: campaignData, error: campaignError } = await supabase
       .from('campaigns')
-      .insert(campaigns)
-      .select();
-
+      .upsert(campaigns, { onConflict: 'slug' })
+      .select('id');
     if (campaignError) throw campaignError;
-    console.log(`Guidesoft: Seeded ${campaignData.length} campaigns`);
 
-    // Seed casting calls / events
-    const events = [];
-    for (let i = 0; i < 15; i++) {
-      events.push({
-        title: `${brands[Math.floor(Math.random() * brands.length)]} Casting Call`,
-        event_type: 'casting',
-        description: 'Open casting for upcoming fashion campaign. Looking for fresh faces with unique style and personality.',
-        start_date: new Date(2025, Math.floor(Math.random() * 6), Math.floor(Math.random() * 28)).toISOString(),
-        end_date: new Date(2025, Math.floor(Math.random() * 6) + 6, Math.floor(Math.random() * 28)).toISOString(),
-        location: ['New York', 'Los Angeles', 'Miami', 'Chicago', 'Atlanta'][Math.floor(Math.random() * 5)],
-        country: 'USA',
-        required_models: Math.floor(Math.random() * 10) + 5,
-        budget_min: 1000 + Math.floor(Math.random() * 5000),
-        budget_max: 5000 + Math.floor(Math.random() * 10000),
-        featured: Math.random() > 0.7,
-        status: 'active',
-      });
-    }
+    // Seed events (casting calls)
+    const events = Array.from({ length: 10 }).map((_, i) => ({
+      created_by: brandUserIds[i % brandUserIds.length],
+      title: `Seed Casting Call #${i + 1}`,
+      event_type: 'casting',
+      description: `${SEED_TAG}: Open casting for upcoming campaign.`,
+      start_date: new Date(2026, (i % 6), ((i * 3) % 25) + 1).toISOString(),
+      end_date: new Date(2026, (i % 6), ((i * 3) % 25) + 2).toISOString(),
+      location: ['New York', 'Los Angeles', 'Miami', 'Chicago', 'Atlanta'][i % 5],
+      country: 'USA',
+      required_models: 5 + (i % 6),
+      budget_min: 2500 + i * 200,
+      budget_max: 7000 + i * 400,
+      featured: i % 3 === 0,
+      status: 'active',
+    }));
 
-    const { data: eventData, error: eventError } = await supabase
-      .from('events')
-      .insert(events)
-      .select();
-
+    const { data: eventData, error: eventError } = await supabase.from('events').insert(events).select('id');
     if (eventError) throw eventError;
-    console.log(`Guidesoft: Seeded ${eventData.length} casting calls`);
 
-    console.log('Guidesoft: Database seeding completed successfully!');
+    console.log(`${SEED_TAG}: Database seeding completed successfully!`);
 
     return new Response(
       JSON.stringify({
         success: true,
         message: 'Database seeded successfully',
+        demoLogins: {
+          password,
+          agencies: agencyAccounts.map((a) => a.email),
+          brands: brandAccounts.map((b) => b.email),
+          models: seedModelEmails.slice(0, Math.min(5, seedModelEmails.length)),
+        },
         stats: {
-          categories: categoryData.length,
-          agencies: agencyData.length,
-          models: modelData.length,
-          portfolioImages: portfolioData.length,
-          campaigns: campaignData.length,
-          events: eventData.length,
+          categories: categoryData?.length || 0,
+          agencies: agencyData?.length || 0,
+          models: modelData?.length || 0,
+          portfolioImages: portfolioImages.length,
+          campaigns: campaignData?.length || 0,
+          events: eventData?.length || 0,
         },
       }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   } catch (error) {
-    console.error('Guidesoft: Seeding error:', error);
+    console.error(`${SEED_TAG}: Seeding error:`, error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return new Response(
-      JSON.stringify({ error: errorMessage }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
-    );
+    return new Response(JSON.stringify({ error: errorMessage }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      status: 500,
+    });
   }
 });

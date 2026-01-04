@@ -68,7 +68,7 @@ export const Navbar = () => {
       .select('full_name, avatar_url')
       .eq('id', userId)
       .single();
-    
+
     if (data) {
       setProfile(data);
     }
@@ -83,32 +83,32 @@ export const Navbar = () => {
     return [
       {
         key: 'discover',
-      label: 'Discover',
-      items: [
-        { label: 'Search Models', href: '/search' },
-        { label: 'New Faces', href: '/models/new-faces' },
-        { label: 'Top Models', href: '/models/top-models' },
+        label: 'Discover',
+        items: [
+          { label: 'Search Models', href: '/search' },
+          { label: 'New Faces', href: '/models/new-faces' },
+          { label: 'Top Models', href: '/models/top-models' },
         ],
-    },
+      },
       {
         key: 'models',
-      label: 'Models',
-      items: [
-        { label: 'All Models', href: '/models' },
-        { label: 'Fashion', href: '/models/fashion' },
-        { label: 'Editorial', href: '/models/editorial' },
-        { label: 'Commercial', href: '/models/commercial' },
-        { label: 'Runway', href: '/models/runway' },
-        { label: 'Plus Size', href: '/models/plus-size' },
-        { label: 'Mature', href: '/models/mature' },
+        label: 'Models',
+        items: [
+          { label: 'All Models', href: '/models' },
+          { label: 'Fashion', href: '/models/fashion' },
+          { label: 'Editorial', href: '/models/editorial' },
+          { label: 'Commercial', href: '/models/commercial' },
+          { label: 'Runway', href: '/models/runway' },
+          { label: 'Plus Size', href: '/models/plus-size' },
+          { label: 'Mature', href: '/models/mature' },
         ],
-    },
+      },
       {
         key: 'agencies',
-      label: 'Agencies',
-      items: [
-        { label: 'All Agencies', href: '/agencies' },
-        { label: 'Become a Partner', href: '/agencies/become-partner' },
+        label: 'Agencies',
+        items: [
+          { label: 'All Agencies', href: '/agencies' },
+          { label: 'Become a Partner', href: '/agencies/become-partner' },
         ],
       },
       { key: 'casting', label: 'Casting', href: '/casting' },
@@ -116,13 +116,13 @@ export const Navbar = () => {
       { key: 'services', label: 'Services', href: '/services' },
       {
         key: 'company',
-      label: 'Company',
-      items: [
-        { label: 'About Us', href: '/company/about' },
-        { label: 'Our Mission', href: '/company/mission' },
-        { label: 'Careers', href: '/company/careers' },
-        { label: 'Press & Media', href: '/company/press' },
-        { label: 'Contact', href: '/company/contact' },
+        label: 'Company',
+        items: [
+          { label: 'About Us', href: '/company/about' },
+          { label: 'Our Mission', href: '/company/mission' },
+          { label: 'Careers', href: '/company/careers' },
+          { label: 'Press & Media', href: '/company/press' },
+          { label: 'Contact', href: '/company/contact' },
         ],
       },
     ] as const;
@@ -143,12 +143,12 @@ export const Navbar = () => {
                 <NavigationMenuList className="gap-1">
                   {navigation.map((item) => (
                     <NavigationMenuItem key={item.key}>
-                  {'items' in item ? (
-                    <>
+                      {'items' in item ? (
+                        <>
                           <NavigationMenuTrigger className="bg-transparent">{item.label}</NavigationMenuTrigger>
                           <NavigationMenuContent>
                             <ul className="grid gap-1 p-2 md:w-[520px] md:grid-cols-2">
-                          {item.items.map((subItem) => (
+                              {item.items.map((subItem) => (
                                 <li key={subItem.href}>
                                   <NavigationMenuLink asChild>
                                     <NavLink
@@ -168,8 +168,8 @@ export const Navbar = () => {
                               ))}
                             </ul>
                           </NavigationMenuContent>
-                    </>
-                  ) : (
+                        </>
+                      ) : (
                         <NavigationMenuLink asChild>
                           <NavLink
                             to={item.href}
@@ -177,12 +177,12 @@ export const Navbar = () => {
                               cn(navigationMenuTriggerStyle(), 'bg-transparent', isActive && 'bg-accent/50')
                             }
                           >
-                      {item.label}
+                            {item.label}
                           </NavLink>
                         </NavigationMenuLink>
-                  )}
+                      )}
                     </NavigationMenuItem>
-              ))}
+                  ))}
                 </NavigationMenuList>
               </NavigationMenu>
             </div>
@@ -191,7 +191,7 @@ export const Navbar = () => {
           {/* Right actions */}
           <div className="hidden md:flex items-center gap-2">
             <ThemeToggle />
-            
+
             <Button variant="ghost" size="icon" onClick={() => navigate('/search')} aria-label="Search">
               <Search className="h-5 w-5" />
             </Button>
@@ -206,9 +206,9 @@ export const Navbar = () => {
                   <MessageSquare className="h-5 w-5" />
                 </Button>
 
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={() => navigate('/notifications')}
                   aria-label="Notifications"
                   className="relative"
@@ -288,20 +288,20 @@ export const Navbar = () => {
                         <Search className="mr-2 h-4 w-4" />
                         Search
                       </Button>
-        </div>
+                    </div>
 
                     <div className="space-y-4">
                       {navigation.map((item) => (
                         <div key={item.key} className="space-y-2">
-                {'items' in item ? (
-                  <>
+                          {'items' in item ? (
+                            <>
                               <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                                 {item.label}
                               </div>
                               <div className="grid gap-1">
-                      {item.items.map((subItem) => (
+                                {item.items.map((subItem) => (
                                   <NavLink
-                          key={subItem.href}
+                                    key={subItem.href}
                                     to={subItem.href}
                                     className={({ isActive }) =>
                                       cn(
@@ -309,13 +309,13 @@ export const Navbar = () => {
                                         isActive && 'bg-accent/50',
                                       )
                                     }
-                        >
-                          {subItem.label}
+                                  >
+                                    {subItem.label}
                                   </NavLink>
-                      ))}
-                    </div>
-                  </>
-                ) : (
+                                ))}
+                              </div>
+                            </>
+                          ) : (
                             <NavLink
                               to={item.href}
                               className={({ isActive }) =>
@@ -327,18 +327,18 @@ export const Navbar = () => {
                             >
                               <span>{item.label}</span>
                             </NavLink>
-                )}
-              </div>
-            ))}
+                          )}
+                        </div>
+                      ))}
                     </div>
-            
+
                     <div className="border-t pt-4 space-y-2">
-              {user ? (
-                <>
+                      {user ? (
+                        <>
                           <Button variant="outline" size="sm" className="w-full" onClick={() => navigate('/dashboard')}>
                             <User className="mr-2 h-4 w-4" />
-                    Dashboard
-                  </Button>
+                            Dashboard
+                          </Button>
                           <Button variant="outline" size="sm" className="w-full" onClick={() => navigate('/favorites')}>
                             <Heart className="mr-2 h-4 w-4" />
                             Favorites
@@ -365,21 +365,21 @@ export const Navbar = () => {
                           </Button>
                           <Button variant="destructive" size="sm" className="w-full" onClick={handleSignOut}>
                             <LogOut className="mr-2 h-4 w-4" />
-                    Sign Out
-                  </Button>
-                </>
-              ) : (
-                <>
+                            Sign Out
+                          </Button>
+                        </>
+                      ) : (
+                        <>
                           <Button variant="outline" size="sm" className="w-full" onClick={() => navigate('/auth')}>
-                    Sign In
-                  </Button>
+                            Sign In
+                          </Button>
                           <Button size="sm" className="w-full" onClick={() => navigate('/auth')}>
-                    Join Now
-                  </Button>
-                </>
-              )}
-            </div>
-          </div>
+                            Join Now
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
                 </ScrollArea>
               </SheetContent>
             </Sheet>
